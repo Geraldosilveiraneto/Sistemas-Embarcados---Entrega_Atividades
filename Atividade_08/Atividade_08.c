@@ -6,9 +6,9 @@
 #include "esp_adc/adc_oneshot.h"
 
 /* ─── Pinos ─────────────────────────────────────────────── */
-#define LED_PIN     GPIO_NUM_35
-#define BUTTON_PIN  GPIO_NUM_47
-#define ADC_CHANNEL ADC_CHANNEL_3  // GPIO34
+#define LED_PIN        GPIO_NUM_35
+#define BUTTON_PIN     GPIO_NUM_47
+#define ADC_CHANNEL    ADC_CHANNEL_3   // GPIO4
 
 /* ─── LEDC ──────────────────────────────────────────────── */
 #define LEDC_TIMER      LEDC_TIMER_0
@@ -22,49 +22,52 @@
 #define VREF_MV         3300   // tensão de referência em mV
 
 /* ─── Estado global ─────────────────────────────────────── */
-static volatile bool hold_mode    = false;
-static volatile int  frozen_duty  = 0;
+static volatile bool hold_mode   = false;
+static volatile int  frozen_duty = 0;
 
 /* ─── Handles ───────────────────────────────────────────── */
-static TaskHandle_t       button_task_handle = NULL;
-static adc_oneshot_unit_handle_t adc_handle  = NULL;
+static TaskHandle_t              button_task_handle = NULL;
+static adc_oneshot_unit_handle_t adc_handle         = NULL;
 
 /* ══════════════════════════════════════════════════════════
-   ISR do botão — notifica a task
+   ISR do botão — notificação BINÁRIA (sem acúmulo)
    ══════════════════════════════════════════════════════════ */
 void IRAM_ATTR button_isr_handler(void *arg)
 {
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    vTaskNotifyGiveFromISR(button_task_handle, &xHigherPriorityTaskWoken);
+    xTaskNotifyFromISR(button_task_handle,
+                       0,
+                       eNoAction,
+                       &xHigherPriorityTaskWoken);
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
 /* ══════════════════════════════════════════════════════════
-   Task do botão — alterna HOLD / LIVE
+   Task do botão — toggle HOLD/LIVE ilimitado
    ══════════════════════════════════════════════════════════ */
 void button_task(void *arg)
 {
     while (1) {
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);   // aguarda ISR
+        /* bloqueia até ISR sinalizar — limpa notificação ao acordar */
+        xTaskNotifyWait(0, ULONG_MAX, NULL, portMAX_DELAY);
 
-        vTaskDelay(pdMS_TO_TICKS(50));              // debounce
+        vTaskDelay(pdMS_TO_TICKS(50));          // debounce
 
         if (gpio_get_level(BUTTON_PIN) == 0) {
-            hold_mode = !hold_mode;
 
-            if (hold_mode) {
-                printf("[BOTAO] Modo HOLD ativado. Brilho congelado.\n");
-            } else {
-                printf("[BOTAO] Modo LIVE restaurado.\n");
-            }
+            hold_mode = !hold_mode;             // toggle ilimitado
 
-            /* aguarda soltar o botão antes de aceitar novo acionamento */
+            printf("[BOTAO] Modo %s.\n", hold_mode ? "HOLD ativado. Brilho congelado"
+                                                    : "LIVE restaurado");
+
+            /* aguarda soltar para não disparar duplo */
             while (gpio_get_level(BUTTON_PIN) == 0) {
                 vTaskDelay(pdMS_TO_TICKS(10));
             }
-        }
 
-        ulTaskNotifyTake(pdTRUE, 0);               // limpa notificações extras
+            /* descarta bounces acumulados durante o processamento */
+            xTaskNotifyStateClear(button_task_handle);
+        }
     }
 }
 
@@ -73,8 +76,8 @@ void button_task(void *arg)
    ══════════════════════════════════════════════════════════ */
 void adc_pwm_task(void *arg)
 {
-    int  adc_raw   = 0;
-    int  duty      = 0;
+    int      adc_raw    = 0;
+    int      duty       = 0;
     uint32_t voltage_mv = 0;
 
     while (1) {
@@ -83,14 +86,14 @@ void adc_pwm_task(void *arg)
             adc_oneshot_read(adc_handle, ADC_CHANNEL, &adc_raw);
 
             /* ── escalonamento: ADC 12-bit → duty LEDC 12-bit (1:1) ── */
-            duty = adc_raw;
+            duty        = adc_raw;
             frozen_duty = duty;
 
             /* ── aplica PWM ── */
             ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, duty);
             ledc_update_duty(LEDC_MODE, LEDC_CHANNEL);
         }
-        /* em HOLD: mantém o último duty sem atualizar */
+        /* em HOLD: frozen_duty mantém o último valor, PWM não muda */
 
         /* ── tensão: V(mV) = (raw * 3300) / 4095 ── */
         voltage_mv = ((uint32_t)frozen_duty * VREF_MV) / ADC_MAX_RAW;
@@ -139,8 +142,8 @@ void app_main(void)
     adc_oneshot_new_unit(&adc_unit_cfg, &adc_handle);
 
     adc_oneshot_chan_cfg_t adc_chan_cfg = {
-        .bitwidth = ADC_BITWIDTH_12,        // resolução 12-bit → 0–4095
-        .atten    = ADC_ATTEN_DB_12,        // faixa 0–3,3 V
+        .bitwidth = ADC_BITWIDTH_12,     // resolução 12-bit → 0–4095
+        .atten    = ADC_ATTEN_DB_12,     // faixa 0–3,3 V
     };
     adc_oneshot_config_channel(adc_handle, ADC_CHANNEL, &adc_chan_cfg);
 
