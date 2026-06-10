@@ -31,8 +31,8 @@
 
 /* =========================================================
    FILTRO — AJUSTE AQUI SE AINDA OSCILAR
-   Alpha próximo de 1.0 = mais suave (mais giroscópio)
-   Alpha próximo de 0.0 = mais rápido (mais acelerômetro)
+   Alpha próximo de 1.0 = mais suave 
+   Alpha próximo de 0.0 = mais rápido 
    ========================================================= */
 #define FILTRO_ALPHA    0.98f     // 98% giroscópio + 2% acelerômetro
 
