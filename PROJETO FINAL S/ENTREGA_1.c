@@ -20,7 +20,7 @@
 #define SERVO2_PIN      GPIO_NUM_41      // Servo eixo Y
 #define PWM_FREQ_HZ     50
 
-#define LED_PIN         GPIO_NUM_8
+#define LED_PIN         GPIO_NUM_48
 
 /* =========================================================
    VARIÁVEIS COMPARTILHADAS
